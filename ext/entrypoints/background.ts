@@ -1,5 +1,6 @@
 import { upload_cookie, download_cookie, load_data, save_data, sleep } from '../utils/functions';
 import browser from 'webextension-polyfill';
+import { sync_due } from '../utils/sync-schedule';
 
 export default defineBackground(() => {
   console.log('CookieCloud Background Script Started', { id: browser.runtime.id });
@@ -52,7 +53,7 @@ export default defineBackground(() => {
 
         if (config.uuid) {
           // If current minute count is divisible by interval, execute sync
-          if (parseInt(config.interval) < 1 || minute_count % config.interval == 0) {
+          if (sync_due(now, config.interval)) {
             // Start sync
             console.log(`Execute sync ${minute_count} ${config.interval}`);
             if (config.type && config.type == 'down') {

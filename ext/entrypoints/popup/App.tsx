@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { load_data, save_data } from '../../utils/functions';
 import UploadedCookies from '../../components/UploadedCookies';
+import NextSync from '../../components/NextSync';
 import { ConfigData, export_config, import_config } from '../../utils/config-transfer';
 import { handleConfigMessage } from '../../utils/messaging';
 import short_uid from 'short-uuid';
@@ -182,11 +183,12 @@ const CookieCloudPopup: React.FC = () => {
     <div className="w-full max-w-5xl mx-auto overflow-x-hidden bg-white rounded-lg shadow-lg flex flex-col min-h-screen relative">
       <div className="flex-1 overflow-y-auto p-5 pb-20">
         <div className="text-center mb-5 pb-4 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-800">CookieCloud</h2>
+          <h2 className="text-xl font-semibold text-gray-800">CookieCloud <span className="text-sm text-gray-500">v{browser.runtime.getManifest().version}</span></h2>
           <p className="text-sm text-gray-500 mt-2">未保存的设置会自动保留为草稿；点击“保存”后才应用于自动同步。</p>
           {draftError && <p role="alert" className="text-sm text-red-600 mt-2">{draftError}</p>}
         </div>
 
+        <NextSync />
         <section className="border border-gray-200 rounded p-4 mb-5">
           <h3 className="font-medium text-gray-800">配置导入 / 导出</h3>
           <p className="text-sm text-gray-500 mt-2">导出当前页面的全部设置，包含 UUID、密码和请求 Header，请妥善保管。配置文件不包含 Cookie 或 LocalStorage 数据。</p>
@@ -490,7 +492,7 @@ const CookieCloudPopup: React.FC = () => {
           )}
 
         </fieldset>
-        {loaded && <UploadedCookies endpoint={data.endpoint} password={data.password} headers={data.headers} />}
+        {loaded && <UploadedCookies endpoint={data.endpoint} password={data.password} headers={data.headers} currentUuid={data.uuid} mode={data.type} />}
       </div>
       
       {/* 固定在底部的按钮组 */}

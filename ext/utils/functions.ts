@@ -35,9 +35,55 @@ export interface UploadedRecord {
   crypto_type: string;
   data?: { cookie_data: CookieData; local_storage_data?: LocalStorageData; update_time?: string };
   error?: string;
+  source_encrypted?: string;
 }
 
-export async function query_uploaded_cookies(endpoint: string, password: string, extraHeaders: string = ''): Promise<UploadedRecord[]> {
+export function is_host_only_cookie(cookie: { domain?: string; hostOnly?: boolean }): boolean {
+  // Chrome exports domain cookies with a leading dot. Never broaden a stored
+  // bare hostname because an old or imported hostOnly flag is inconsistent.
+  return cookie.hostOnly === true || !String(cookie.domain || '').startsWith('.');
+}
+
+export function cookie_identity(cookie: any): string {
+  return JSON.stringify([
+    cookie.name, cookie.domain, cookie.path || '/', is_host_only_cookie(cookie), cookie.storeId || '',
+    cookie.partitionKey?.topLevelSite || '', cookie.partitionKey?.hasCrossSiteAncestor ?? null,
+  ]);
+}
+
+export async function apply_browser_cookie_value(cookie: any, value: string): Promise<void> {
+  const details: any = { url: buildUrl(cookie.secure, cookie.domain, cookie.path || '/'), name: cookie.name, value };
+  for (const key of ['path', 'secure', 'httpOnly', 'sameSite', 'partitionKey', 'storeId', 'expirationDate']) {
+    if (cookie[key] !== undefined && cookie[key] !== null) details[key] = cookie[key];
+  }
+  if (!is_host_only_cookie(cookie)) details.domain = cookie.domain;
+  if (details.sameSite === 'unspecified' && is_firefox()) details.sameSite = 'no_restriction';
+  const saved = await browser.cookies.set(details);
+  if (!saved || saved.value !== value || is_host_only_cookie(saved) !== is_host_only_cookie(cookie) || saved.domain !== cookie.domain) {
+    throw new Error('浏览器未按原域名和范围保存 Cookie，请检查本地 Cookie');
+  }
+}
+
+export interface ClearCookiesResult {
+  action: string;
+  cleared_uuids: number;
+  deleted_cookies: number;
+  skipped: { uuid: string; error: string }[];
+}
+
+export async function clear_uploaded_cookies(endpoint: string, password: string, extraHeaders: string = ''): Promise<ClearCookiesResult> {
+  const response = await fetch(endpoint.trim().replace(/\/+$/, '') + '/records/clear-cookies', {
+    method: 'POST',
+    headers: { ...request_headers(extraHeaders), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: 'clear-all-cookies', password }),
+  });
+  if (!response.ok) throw new Error(response.status === 404 ? '服务端尚未支持清理，请更新服务端。' : `清理失败：HTTP ${response.status}`);
+  const result = await response.json();
+  if (result.action !== 'done' || !Array.isArray(result.skipped)) throw new Error('服务器未确认清理结果');
+  return result;
+}
+
+function request_headers(extraHeaders: string): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const line of extraHeaders.split('\n')) {
     if (!line.trim()) continue;
@@ -45,6 +91,11 @@ export async function query_uploaded_cookies(endpoint: string, password: string,
     if (colon < 1) throw new Error('请求 Header 格式应为 Key:Value');
     headers[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
   }
+  return headers;
+}
+
+export async function query_uploaded_cookies(endpoint: string, password: string, extraHeaders: string = ''): Promise<UploadedRecord[]> {
+  const headers = request_headers(extraHeaders);
   const response = await fetch(endpoint.trim().replace(/\/+$/, '') + '/records', { headers, cache: 'no-store' });
   if (!response.ok) throw new Error(response.status === 404 ? '服务端尚未支持查询，请更新服务端。' : `查询失败：HTTP ${response.status}`);
   const result = await response.json();
@@ -59,11 +110,73 @@ export async function query_uploaded_cookies(endpoint: string, password: string,
       if (!['none', 'legacy', 'aes-128-cbc-fixed'].includes(crypto_type)) throw new Error('不支持的加密算法');
       const data = cookie_decrypt(record.uuid, record.encrypted, password, crypto_type);
       if (!data || typeof data.cookie_data !== 'object' || data.cookie_data === null) throw new Error('Cookie 数据格式无效');
-      return { uuid: record.uuid, crypto_type, data };
+      return { uuid: record.uuid, crypto_type, data, source_encrypted: record.encrypted };
     } catch (error) {
       return { uuid: record.uuid, crypto_type, error: record.error ? '服务端记录无法读取' : (crypto_type === 'none' ? '明文数据格式无效' : '无法解密，请检查此 UUID 对应的密码') };
     }
   });
+}
+
+export async function update_uploaded_cookie(endpoint: string, password: string, extraHeaders: string, record: UploadedRecord, domain: string, index: number, value: string): Promise<UploadedRecord> {
+  return change_uploaded_cookie(endpoint, password, extraHeaders, record, domain, index, value);
+}
+
+export async function delete_uploaded_cookie(endpoint: string, password: string, extraHeaders: string, record: UploadedRecord, domain: string, index: number): Promise<UploadedRecord> {
+  return change_uploaded_cookie(endpoint, password, extraHeaders, record, domain, index, null);
+}
+
+async function change_uploaded_cookie(endpoint: string, password: string, extraHeaders: string, record: UploadedRecord, domain: string, index: number, value: string | null): Promise<UploadedRecord> {
+  if (!record.data || record.source_encrypted === undefined) throw new Error('请先重新查询记录');
+  if (!['none', 'legacy', 'aes-128-cbc-fixed'].includes(record.crypto_type)) throw new Error('不支持的加密算法');
+  if (record.crypto_type !== 'none' && !password) throw new Error('请填写此 UUID 对应的密码');
+  const cookies = record.data.cookie_data[domain];
+  if (!Array.isArray(cookies) || !Number.isInteger(index) || index < 0 || !cookies[index]) throw new Error('Cookie 不存在，请重新查询');
+  const original = cookies[index];
+  const identity = cookie_identity;
+  const key = identity(original);
+  const headers = request_headers(extraHeaders);
+  const base = endpoint.trim().replace(/\/+$/, '');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const latestResponse = await fetch(base + '/get/' + encodeURIComponent(record.uuid), { headers, cache: 'no-store' });
+    if (!latestResponse.ok) throw new Error(`读取最新记录失败：HTTP ${latestResponse.status}`);
+    const latest = await latestResponse.json();
+    const mode = latest.crypto_type || 'legacy';
+    if (!['none', 'legacy', 'aes-128-cbc-fixed'].includes(mode)) throw new Error('不支持的加密算法');
+    if (mode !== 'none' && !password) throw new Error('请填写此 UUID 对应的密码');
+    let data: any;
+    try { data = cookie_decrypt(record.uuid, latest.encrypted, password, mode); }
+    catch { throw new Error('无法读取最新数据，请检查密码并重新查询'); }
+    // Locate the cookie by scope, path, store and partition, rather than an old array position.
+    const matches = Object.values(data.cookie_data || {}).flatMap((entries: any) => Array.isArray(entries) ? entries.filter((cookie: any) => identity(cookie) === key) : []);
+    const current: UploadedRecord = { uuid: record.uuid, crypto_type: mode, data, source_encrypted: latest.encrypted };
+    if (value === null && !matches.length) return current;
+    if (!matches.length) throw new Error('目标 Cookie 已不存在，请重新查询');
+    if (matches.some(cookie => cookie.value !== original.value && cookie.value !== value)) throw new Error('目标 Cookie 的值已被其他同步修改，请重新查询后再操作');
+    if (matches.every(cookie => cookie.value === value)) return current;
+    if (value === null) {
+      for (const [group, entries] of Object.entries(data.cookie_data)) {
+        if (Array.isArray(entries)) data.cookie_data[group] = entries.filter(cookie => identity(cookie) !== key);
+      }
+    } else {
+      for (const cookie of matches) {
+        cookie.value = value;
+        cookie.hostOnly = is_host_only_cookie(cookie);
+      }
+    }
+    data.update_time = new Date().toISOString();
+    const encrypted = cookie_encrypt(record.uuid, JSON.stringify(data), password, mode);
+    const response = await fetch(base + '/update', {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uuid: record.uuid, crypto_type: mode, encrypted, expected_encrypted: latest.encrypted }),
+    });
+    if (response.status === 409) continue;
+    if (!response.ok) throw new Error(`上传失败：HTTP ${response.status}`);
+    const result = await response.json();
+    if (result.action !== 'done') throw new Error('服务器未确认保存成功');
+    return { ...current, data, source_encrypted: encrypted };
+  }
+  throw new Error('自动上传正在频繁更新此记录，请稍后重试或暂停上传后操作');
 }
 
 function is_firefox(): boolean {
@@ -275,8 +388,9 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
           if (Array.isArray(cookie_data[domain])) {
             for (let cookie of cookie_data[domain]) {
               let new_cookie: any = {};
-              ['name', 'value', 'domain', 'path', 'secure', 'httpOnly', 'sameSite'].forEach(key => {
-                if (key == 'sameSite' && cookie[key].toLowerCase() == 'unspecified' && is_firefox()) {
+              ['name', 'value', 'path', 'secure', 'httpOnly', 'sameSite', 'partitionKey'].forEach(key => {
+                if (cookie[key] === undefined || cookie[key] === null) return;
+                if (key == 'sameSite' && String(cookie[key]).toLowerCase() == 'unspecified' && is_firefox()) {
                   // In Firefox, unspecified will cause cookie setting to fail
                   // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/cookies/SameSiteStatus
                   new_cookie['sameSite'] = 'no_restriction';
@@ -284,6 +398,10 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
                   new_cookie[key] = cookie[key];
                 }
               });
+              // Chrome creates a domain cookie whenever domain is supplied.
+              // Omit it for host-only cookies so restoration replaces the original scope.
+              const hostOnly = is_host_only_cookie(cookie);
+              if (!hostOnly) new_cookie.domain = cookie.domain;
               if (expire_minutes) {
                 // Current timestamp (seconds)
                 const now = parseInt((new Date().getTime() / 1000).toString());
@@ -295,11 +413,11 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
 
               }
               new_cookie.url = buildUrl(cookie.secure, cookie.domain, cookie.path);
-              console.log("new cookie", new_cookie);
+
               try {
-                const set_ret = await browser.cookies.set(new_cookie);
-                console.log("set cookie", set_ret);
+                await browser.cookies.set(new_cookie);
               } catch (error) {
+                action = 'false';
                 showBadge("err");
                 console.log("set cookie error", error);
               }

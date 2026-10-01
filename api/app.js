@@ -70,6 +70,46 @@ app.get(`${api_root}/records`, (req, res) => {
     }
 });
 
+// Clear cookies while retaining UUID records, LocalStorage and encryption.
+app.post(`${api_root}/records/clear-cookies`, (req, res) => {
+    if (req.body.confirm !== 'clear-all-cookies') {
+        res.status(400).json({ error: 'Explicit cleanup confirmation is required' });
+        return;
+    }
+    try {
+        let cleared_uuids = 0;
+        let deleted_cookies = 0;
+        const skipped = [];
+        const entries = fs.readdirSync(data_dir, { withFileTypes: true })
+            .filter(entry => entry.isFile() && entry.name.endsWith('.json'));
+        for (const entry of entries) {
+            const uuid = entry.name.slice(0, -5);
+            try {
+                const file_path = path.join(data_dir, entry.name);
+                const stored = JSON.parse(fs.readFileSync(file_path, 'utf8'));
+                const mode = stored.crypto_type || 'legacy';
+                if (!['none', 'legacy', 'aes-128-cbc-fixed'].includes(mode)) throw new Error('Unsupported encryption');
+                if (mode !== 'none' && !req.body.password) throw new Error('Password required');
+                const data = cookie_decrypt(uuid, stored.encrypted, req.body.password || '', mode);
+                if (!data || !data.cookie_data || typeof data.cookie_data !== 'object' || Array.isArray(data.cookie_data)) throw new Error('Invalid cookie data');
+                const count = Object.values(data.cookie_data).reduce((total, cookies) => total + (Array.isArray(cookies) ? cookies.length : 0), 0);
+                if (!count) continue;
+                data.cookie_data = {};
+                data.update_time = new Date().toISOString();
+                stored.encrypted = cookie_encrypt(uuid, data, req.body.password || '', mode);
+                fs.writeFileSync(file_path, JSON.stringify(stored));
+                cleared_uuids++;
+                deleted_cookies += count;
+            } catch (error) {
+                skipped.push({ uuid, error: 'Cannot read, decrypt or clear this record' });
+            }
+        }
+        res.json({ action: 'done', cleared_uuids, deleted_cookies, skipped });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to clear cookies' });
+    }
+});
+
 app.post(`${api_root}/update`, (req, res) => {
     try {
         const { encrypted, uuid, crypto_type = 'legacy' } = req.body;
@@ -82,6 +122,14 @@ app.post(`${api_root}/update`, (req, res) => {
 
         // save encrypted to uuid file with crypto_type
         const file_path = path.join(data_dir, path.basename(uuid)+'.json');
+        // Editing a queried record must not overwrite a newer upload.
+        if (req.body.expected_encrypted !== undefined) {
+            if (!fs.existsSync(file_path) || JSON.parse(fs.readFileSync(file_path, 'utf8')).encrypted !== req.body.expected_encrypted) {
+                res.status(409).json({ error: 'Record changed; query again before editing' });
+                return;
+            }
+        }
+
         const content = JSON.stringify({
             encrypted: encrypted,
             crypto_type: crypto_type

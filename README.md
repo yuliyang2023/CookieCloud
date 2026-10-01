@@ -148,6 +148,30 @@ This mode transmits and stores both cookies and LocalStorage in plaintext and is
 
 The protocol uses `crypto_type: "none"`; `encrypted` contains a plaintext JSON string with `cookie_data`, `local_storage_data`, and `update_time`. `GET /get/:uuid` returns the field and mode marker; parse it with `JSON.parse(encrypted)`. `POST /get/:uuid` with a `password` also parses plaintext directly. Existing encrypted data is not converted automatically; upload again after changing modes.
 
+### Next automatic synchronization
+
+The settings page shows the next expected automatic upload/download time and a countdown based on saved settings and the actual browser alarm. Draft edits do not affect the schedule; saving refreshes the display. Paused synchronization is shown explicitly. Browser sleep or background scheduling may delay actual execution.
+
+### Clearing all uploaded cookies
+
+The query area provides **清空服务端全部 Cookie** (clear all server cookies). Review the server address and confirm to clear `cookie_data` across UUID records while preserving UUIDs, LocalStorage, other fields and encryption. The result reports the affected UUID and cookie counts.
+
+Encrypted records use the entered password. Records with other passwords, malformed data or write failures are retained and listed as skipped; repeat with the matching password as needed. Browser cookies remain unchanged and automatic uploads may repopulate the server.
+
+`POST /records/clear-cookies` accepts JSON `{ "confirm": "clear-all-cookies", "password": "..." }`. Missing the explicit confirmation marker returns HTTP 400 without modifying records.
+
+### Editing uploaded cookies
+
+The edit form offers **同时更新当前浏览器的 Cookie** (also update the current browser). It defaults to enabled when editing the configured UUID in upload mode. Saving mirrors the edited cookie value into the same local scope, path, store and partition while retaining its domain and HttpOnly attribute, preventing a subsequent manual upload from restoring the old local value. Unchecking it edits only the server. Existing cookies in other scopes are retained and may still be uploaded.
+
+The **删除** (delete) action targets the selected cookie scope, path and partition. Review the UUID, actual domain and path, then select **删除并上传** (delete and upload). Other data and encryption are preserved with the same latest-record merge and conflict protection. Browser cookies are not removed; automatic uploads may upload them again.
+
+Query and search for a cookie, select **修改值** (edit value), then **保存并上传** (save and upload). This updates the row's UUID while preserving other cookies, LocalStorage, cookie attributes and its original encryption mode. Encrypted records require their matching password. Empty values are supported.
+
+Before saving, the extension fetches the latest record and locates the target by name, domain, path, host scope, store and partition. Unrelated automatic uploads are merged while preserving other cookies and LocalStorage. Updates include `expected_encrypted` and retry HTTP 409 conflicts up to three times. Changes to the target value require querying again. Subsequent browser uploads can overwrite manual server edits.
+
+Restoration preserves host-only and partition scope, omitting `domain` for host-only cookies to avoid creating a domain cookie. The query table displays each scope. Existing records with different scopes remain intact and require manual cleanup after reviewing which cookie to retain.
+
 ### Configuration import and export
 
 The settings page provides **导出配置** (export) and **导入配置** (import). Export downloads the current form as JSON, including UUID, password, request headers and other settings. It does not contain cookies or LocalStorage data; keep the file private.
