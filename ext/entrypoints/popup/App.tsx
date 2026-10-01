@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { load_data, save_data } from '../../utils/functions';
 import UploadedCookies from '../../components/UploadedCookies';
+import { ConfigData, export_config, import_config } from '../../utils/config-transfer';
 import { handleConfigMessage } from '../../utils/messaging';
 import short_uid from 'short-uuid';
 import browser from 'webextension-polyfill';
@@ -13,25 +14,14 @@ const CopyIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4" }) =
   </svg>
 );
 
-interface ConfigData {
-  endpoint: string;
-  password: string;
-  interval: number;
-  domains: string;
-  uuid: string;
-  type: string;
-  keep_live: string;
-  with_storage: number;
-  blacklist: string;
-  headers: string;
-  expire_minutes: number;
-  crypto_type: string;
-}
-
 const CookieCloudPopup: React.FC = () => {
   const [loaded, setLoaded] = useState(false);
   const [draftError, setDraftError] = useState('');
   const draftWrites = useRef(Promise.resolve());
+  const importInput = useRef<HTMLInputElement>(null);
+  const [transferMessage, setTransferMessage] = useState('');
+  const [transferError, setTransferError] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [data, setData] = useState<ConfigData>({
     endpoint: "https://ccc.ft07.com",
     password: "",
@@ -148,6 +138,36 @@ const CookieCloudPopup: React.FC = () => {
     handleInputChange('password', String(short_uid.generate()));
   };
 
+  const exportConfig = () => {
+    const url = URL.createObjectURL(new Blob([export_config(data)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `cookiecloud-config-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setTransferError(false);
+    setTransferMessage('已导出当前页面配置。');
+  };
+
+  const importConfig = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    try {
+      if (file.size > 1024 * 1024) throw new Error('配置文件不能超过 1 MB');
+      const config = import_config(await file.text());
+      setData(previous => ({ ...previous, ...config }));
+      setTransferError(false);
+      setTransferMessage('配置已导入草稿，未提供的字段保留当前值。请检查后点击“保存”以应用。');
+    } catch (error) {
+      setTransferError(true);
+      setTransferMessage(error instanceof Error ? error.message : '配置导入失败');
+    } finally { setImporting(false); }
+  };
+
   // 复制成功回调
   const onCopySuccess = (type: 'UUID' | 'Password') => {
     alert(`${type} ${browser.i18n.getMessage('copySuccess') || '已复制到剪贴板'}`);
@@ -166,8 +186,19 @@ const CookieCloudPopup: React.FC = () => {
           <p className="text-sm text-gray-500 mt-2">未保存的设置会自动保留为草稿；点击“保存”后才应用于自动同步。</p>
           {draftError && <p role="alert" className="text-sm text-red-600 mt-2">{draftError}</p>}
         </div>
+
+        <section className="border border-gray-200 rounded p-4 mb-5">
+          <h3 className="font-medium text-gray-800">配置导入 / 导出</h3>
+          <p className="text-sm text-gray-500 mt-2">导出当前页面的全部设置，包含 UUID、密码和请求 Header，请妥善保管。配置文件不包含 Cookie 或 LocalStorage 数据。</p>
+          <div className="flex gap-2 mt-3">
+            <button className="btn btn-primary disabled:opacity-50" disabled={!loaded || importing} onClick={exportConfig}>导出配置</button>
+            <button className="btn bg-gray-100 disabled:opacity-50" disabled={!loaded || importing} onClick={() => importInput.current?.click()}>{importing ? '导入中…' : '导入配置'}</button>
+            <input ref={importInput} type="file" accept=".json,application/json" className="hidden" onChange={importConfig} aria-label="选择配置 JSON 文件" />
+          </div>
+          {transferMessage && <p role={transferError ? 'alert' : 'status'} className={`text-sm mt-3 ${transferError ? 'text-red-600' : 'text-green-700'}`}>{transferMessage}</p>}
+        </section>
         
-        <fieldset disabled={!loaded} className="space-y-4">
+        <fieldset disabled={!loaded || importing} className="space-y-4">
           {/* Working Mode */}
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-2">
@@ -470,14 +501,14 @@ const CookieCloudPopup: React.FC = () => {
               <>
                 <button
                   className="btn btn-primary text-sm px-3 py-2"
-                  disabled={!loaded}
+                  disabled={!loaded || importing}
                   onClick={() => test(browser.i18n.getMessage('syncManual') || '手动同步')}
                 >
                   {browser.i18n.getMessage('syncManual') || '手动同步'}
                 </button>
                 <button
                   className="btn btn-primary text-sm px-3 py-2"
-                  disabled={!loaded}
+                  disabled={!loaded || importing}
                   onClick={() => test(browser.i18n.getMessage('test') || '测试')}
                 >
                   {browser.i18n.getMessage('test') || '测试'}
@@ -487,7 +518,7 @@ const CookieCloudPopup: React.FC = () => {
           </div>
           <button
             className="btn btn-success text-sm px-4 py-2"
-            disabled={!loaded}
+            disabled={!loaded || importing}
             onClick={save}
           >
             {browser.i18n.getMessage('save') || '保存'}

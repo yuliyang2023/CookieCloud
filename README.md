@@ -148,6 +148,12 @@ This mode transmits and stores both cookies and LocalStorage in plaintext and is
 
 The protocol uses `crypto_type: "none"`; `encrypted` contains a plaintext JSON string with `cookie_data`, `local_storage_data`, and `update_time`. `GET /get/:uuid` returns the field and mode marker; parse it with `JSON.parse(encrypted)`. `POST /get/:uuid` with a `password` also parses plaintext directly. Existing encrypted data is not converted automatically; upload again after changing modes.
 
+### Configuration import and export
+
+The settings page provides **导出配置** (export) and **导入配置** (import). Export downloads the current form as JSON, including UUID, password, request headers and other settings. It does not contain cookies or LocalStorage data; keep the file private.
+
+Import accepts version 1 exports and raw configuration JSON objects, validates fields and fills the draft. Omitted fields retain their current values. Review and click **Save** to apply the configuration to background synchronization. Files are limited to 1 MB.
+
 ### Settings tab and uploaded cookie browser
 
 Clicking the Chrome toolbar icon opens `popup.html` in a tab, or focuses the existing settings tab. Unsaved edits are kept as a draft; **Save** applies them to background synchronization.

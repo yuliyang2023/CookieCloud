@@ -144,6 +144,12 @@ cd api && yarn install && node app.js
 
 协议使用 `crypto_type: "none"`，`encrypted` 字段为未经加密的 JSON 字符串（包含 `cookie_data`、`local_storage_data`、`update_time`）。`GET /get/:uuid` 返回该字段及模式标记，调用方可直接 `JSON.parse(encrypted)` 获取数据；`POST /get/:uuid` 带 `password` 时也会直接解析明文。原有加密数据不会自动转换，选择新模式后需要重新上传。
 
+### 配置导入与导出
+
+设置页顶部提供「导出配置」和「导入配置」。导出下载当前页面配置的 JSON 文件，包含 UUID、密码、请求 Header 及其他设置，不包含 Cookie 或 LocalStorage 数据，请妥善保管。
+
+导入支持此插件导出的版本 1 配置，以及直接保存的配置 JSON 对象。导入前校验字段，成功后填入草稿，缺少的字段保留当前值；检查后点击「保存」才应用于自动同步。文件大小上限为 1 MB。
+
 ### 设置标签页与查询全部 Cookie
 
 点击 Chrome 插件图标会打开 `popup.html` 设置标签页，再次点击会切回已有标签页。未保存内容自动保留为草稿，点击「保存」才应用于后台同步。
