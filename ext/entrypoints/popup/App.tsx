@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { load_data, save_data } from '../../utils/functions';
+import UploadedCookies from '../../components/UploadedCookies';
 import { handleConfigMessage } from '../../utils/messaging';
 import short_uid from 'short-uuid';
 import browser from 'webextension-polyfill';
@@ -28,6 +29,9 @@ interface ConfigData {
 }
 
 const CookieCloudPopup: React.FC = () => {
+  const [loaded, setLoaded] = useState(false);
+  const [draftError, setDraftError] = useState('');
+  const draftWrites = useRef(Promise.resolve());
   const [data, setData] = useState<ConfigData>({
     endpoint: "https://ccc.ft07.com",
     password: "",
@@ -46,7 +50,8 @@ const CookieCloudPopup: React.FC = () => {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const savedData = await load_data("COOKIE_SYNC_SETTING");
+        const [saved, draft] = await Promise.all([load_data("COOKIE_SYNC_SETTING"), load_data("COOKIE_SYNC_DRAFT")]);
+        const savedData = { ...(saved && !Array.isArray(saved) ? saved : {}), ...(draft && !Array.isArray(draft) ? draft : {}) };
         if (savedData) {
           // 旧版本 popup 把 radio/number 输入存成字符串；这里归一化成数字，
           // 否则 with_storage === 1 之类的严格比较会让控件显示成未选中。
@@ -63,10 +68,21 @@ const CookieCloudPopup: React.FC = () => {
         }
       } catch (error) {
         console.error('Failed to load data:', error);
+        setDraftError('无法加载已保存配置，请刷新页面后重试。');
+        return;
       }
+      setLoaded(true);
     };
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    draftWrites.current = draftWrites.current
+      .then(() => save_data('COOKIE_SYNC_DRAFT', data))
+      .then(() => setDraftError(''))
+      .catch(() => setDraftError('草稿保存失败，请保持此页面打开并重试。'));
+  }, [data, loaded]);
 
   const handleInputChange = (field: keyof ConfigData, value: string | number) => {
     setData(prevData => ({
@@ -78,7 +94,7 @@ const CookieCloudPopup: React.FC = () => {
   const test = async (action: string = browser.i18n.getMessage('test') || '测试') => {
     console.log("request,begin");
     
-    if (!data.endpoint || !data.password || !data.uuid || !data.type) {
+    if (!data.endpoint || (data.crypto_type !== 'none' && !data.password) || !data.uuid || !data.type) {
       alert(browser.i18n.getMessage("fullMessagePlease") || "请填写完整的信息");
       return;
     }
@@ -108,7 +124,7 @@ const CookieCloudPopup: React.FC = () => {
   };
 
   const save = async () => {
-    if (!data.endpoint || !data.password || !data.uuid || !data.type) {
+    if (!data.endpoint || (data.crypto_type !== 'none' && !data.password) || !data.uuid || !data.type) {
       alert(browser.i18n.getMessage("fullMessagePlease") || "请填写完整的信息");
       return;
     }
@@ -143,13 +159,15 @@ const CookieCloudPopup: React.FC = () => {
   };
 
   return (
-    <div className="w-96 overflow-x-hidden bg-white rounded-lg shadow-lg flex flex-col h-[600px] relative">
+    <div className="w-full max-w-5xl mx-auto overflow-x-hidden bg-white rounded-lg shadow-lg flex flex-col min-h-screen relative">
       <div className="flex-1 overflow-y-auto p-5 pb-20">
         <div className="text-center mb-5 pb-4 border-b border-gray-200">
           <h2 className="text-xl font-semibold text-gray-800">CookieCloud</h2>
+          <p className="text-sm text-gray-500 mt-2">未保存的设置会自动保留为草稿；点击“保存”后才应用于自动同步。</p>
+          {draftError && <p role="alert" className="text-sm text-red-600 mt-2">{draftError}</p>}
         </div>
         
-        <div className="space-y-4">
+        <fieldset disabled={!loaded} className="space-y-4">
           {/* Working Mode */}
           <div>
             <label className="block text-sm font-medium text-gray-600 mb-2">
@@ -249,7 +267,7 @@ const CookieCloudPopup: React.FC = () => {
               </div>
 
               {/* Password */}
-              <div>
+              {data.crypto_type !== 'none' && <div>
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   {browser.i18n.getMessage('syncPassword') || '端对端加密密码'}
                 </label>
@@ -281,7 +299,7 @@ const CookieCloudPopup: React.FC = () => {
                     {browser.i18n.getMessage('generate') || '生成'}
                   </button>
                 </div>
-              </div>
+              </div>}
 
               {/* Crypto Algorithm */}
               <div>
@@ -295,9 +313,12 @@ const CookieCloudPopup: React.FC = () => {
                 >
                   <option value="legacy">{browser.i18n.getMessage('cryptoLegacy') || 'CryptoJS(动态IV)'}</option>
                   <option value="aes-128-cbc-fixed">{browser.i18n.getMessage('cryptoAesCbcFixed') || 'AES-128-CBC(固定IV)'}</option>
+                  <option value="none">{browser.i18n.getMessage('cryptoNone') || '不加密（明文）'}</option>
                 </select>
                 <div className="text-xs text-gray-500 mt-1">
-                  {data.crypto_type === 'legacy' 
+                  {data.crypto_type === 'none'
+                    ? (browser.i18n.getMessage('cryptoNoneDesc') || '无需密码，Cookie 和 LocalStorage 将以明文传输并存储，适用于可信内网。')
+                    : data.crypto_type === 'legacy'
                     ? (browser.i18n.getMessage('cryptoLegacyDesc') || '使用CryptoJS加密算法，会动态生成IV')
                     : (browser.i18n.getMessage('cryptoAesCbcFixedDesc') || '使用标准 AES-128-CBC 算法，IV固定为 0x0')
                   }
@@ -309,13 +330,21 @@ const CookieCloudPopup: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-600 mb-1">
                   {browser.i18n.getMessage('cookieExpireMinutes') || 'Cookie过期时间·分钟'}
                 </label>
-                <input
+                <select className="form-input mb-2" aria-label={browser.i18n.getMessage('cookieExpiryMode') || 'Cookie 有效期模式'}
+                  value={data.expire_minutes === -1 ? 'long' : 'custom'}
+                  onChange={event => handleInputChange('expire_minutes', event.target.value === 'long' ? -1 : 60 * 24 * 365)}>
+                  <option value="custom">{browser.i18n.getMessage('cookieExpiryCustom') || '自定义分钟数'}</option>
+                  <option value="long">{browser.i18n.getMessage('cookieExpiryLong') || '长期有效（每次同步延长 400 天）'}</option>
+                </select>
+                {data.expire_minutes !== -1 && <input
                   type="number"
+                  min="0"
                   className="form-input"
                   placeholder={browser.i18n.getMessage('cookieExpireMinutesPlaceholder') || '0为关闭浏览器后立刻过期'}
                   value={data.expire_minutes}
-                  onChange={(e) => handleInputChange('expire_minutes', parseInt(e.target.value) || 0)}
-                />
+                  onChange={(e) => handleInputChange('expire_minutes', Math.max(0, parseInt(e.target.value) || 0))}
+                />}
+                <p className="text-xs text-gray-500 mt-1">{browser.i18n.getMessage('cookieExpiryDesc') || '仅在覆盖到浏览器时生效。0 为会话 Cookie；长期有效每次同步延长 400 天，无法延长网站服务端的登录会话。'}</p>
               </div>
 
               {/* Sync Interval */}
@@ -429,23 +458,26 @@ const CookieCloudPopup: React.FC = () => {
             </div>
           )}
 
-        </div>
+        </fieldset>
+        {loaded && <UploadedCookies endpoint={data.endpoint} password={data.password} headers={data.headers} />}
       </div>
       
       {/* 固定在底部的按钮组 */}
-      <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4">
+      <div className="sticky bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4">
         <div className="flex justify-between">
           <div className="space-x-2">
             {data.type !== 'pause' && (
               <>
                 <button
                   className="btn btn-primary text-sm px-3 py-2"
+                  disabled={!loaded}
                   onClick={() => test(browser.i18n.getMessage('syncManual') || '手动同步')}
                 >
                   {browser.i18n.getMessage('syncManual') || '手动同步'}
                 </button>
                 <button
                   className="btn btn-primary text-sm px-3 py-2"
+                  disabled={!loaded}
                   onClick={() => test(browser.i18n.getMessage('test') || '测试')}
                 >
                   {browser.i18n.getMessage('test') || '测试'}
@@ -455,6 +487,7 @@ const CookieCloudPopup: React.FC = () => {
           </div>
           <button
             className="btn btn-success text-sm px-4 py-2"
+            disabled={!loaded}
             onClick={save}
           >
             {browser.i18n.getMessage('save') || '保存'}

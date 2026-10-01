@@ -136,6 +136,22 @@ cd api && yarn install && node app.js
    - password:可选，不提供返回加密后的字符串，提供则发送尝试解密后的内容；
 
 
+### 内网明文模式
+
+在插件的「加密算法」中选择「不加密（明文）」，密码可以留空，保存后即可同步。默认仍使用原有加密算法。
+
+此模式同时适用于 Cookie 和 LocalStorage，上传和服务器存储均为明文，仅适用于可信内网。需要使用包含此改动的插件和服务端；现有 Docker Compose 使用预构建镜像，须自行构建并替换镜像才能启用。
+
+协议使用 `crypto_type: "none"`，`encrypted` 字段为未经加密的 JSON 字符串（包含 `cookie_data`、`local_storage_data`、`update_time`）。`GET /get/:uuid` 返回该字段及模式标记，调用方可直接 `JSON.parse(encrypted)` 获取数据；`POST /get/:uuid` 带 `password` 时也会直接解析明文。原有加密数据不会自动转换，选择新模式后需要重新上传。
+
+### 设置标签页与查询全部 Cookie
+
+点击 Chrome 插件图标会打开 `popup.html` 设置标签页，再次点击会切回已有标签页。未保存内容自动保留为草稿，点击「保存」才应用于后台同步。
+
+页面底部的「查询 / 刷新全部记录」读取当前服务器所有 UUID 的上传记录，可按 UUID、域名、Cookie 名称或值搜索，并展开查看完整数据。明文记录无需密码；加密记录使用当前填写的密码在插件内解密，不同密码的 UUID 需分别填写对应密码后重新查询。
+
+服务端增加 `GET /records`，返回 `{ "records": [{ "uuid": "...", "crypto_type": "...", "encrypted": "..." }] }`，不写入浏览器 Cookie。此接口按内网部署需求提供全部记录，不要求逐个提供 UUID。损坏的文件保留 UUID 并返回 `error`，不影响其余记录。
+
 ## Cookie加解密算法
 
 ### 加密

@@ -47,6 +47,29 @@ app.all(`${api_root}/`, (req, res) => {
     res.send('Hello World!'+`API ROOT = ${api_root}`);
 });
 
+// List all uploaded UUIDs without changing browser cookies or server data.
+app.get(`${api_root}/records`, (req, res) => {
+    try {
+        const records = fs.readdirSync(data_dir, { withFileTypes: true })
+            .filter(entry => entry.isFile() && entry.name.endsWith('.json'))
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map(entry => {
+                const uuid = entry.name.slice(0, -5);
+                try {
+                    const data = JSON.parse(fs.readFileSync(path.join(data_dir, entry.name), 'utf8'));
+                    if (typeof data.encrypted !== 'string') throw new Error('Invalid record');
+                    return { uuid, encrypted: data.encrypted, crypto_type: data.crypto_type || 'legacy' };
+                } catch (error) {
+                    return { uuid, error: 'Record cannot be read' };
+                }
+            });
+        res.set('Cache-Control', 'no-store');
+        res.json({ records });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to list uploaded records' });
+    }
+});
+
 app.post(`${api_root}/update`, (req, res) => {
     try {
         const { encrypted, uuid, crypto_type = 'legacy' } = req.body;
@@ -101,7 +124,7 @@ app.all(`${api_root}/get/:uuid`, (req, res) => {
             if( req.body.password )
             {
                 // 优先使用查询参数指定的算法，其次使用存储的算法，最后使用legacy
-                const useCryptoType = crypto_type || data.crypto_type || 'legacy';
+                const useCryptoType = data.crypto_type === 'none' ? 'none' : (crypto_type || data.crypto_type || 'legacy');
                 const parsed = cookie_decrypt( uuid, data.encrypted, req.body.password, useCryptoType );
                 res.json(parsed);
             }else
@@ -134,31 +157,25 @@ app.use(function (err, req, res, next) {
 });
 
 // graceful shutdown
-process.on('SIGTERM', async () => {
+process.on('SIGTERM', () => {
     logger.info('SIGTERM signal received.');
 
     // close http server
     server.close(() => {
         logger.info('HTTP server closed.');
+        // Allow the final log entries to flush before exiting.
+        setTimeout(() => process.exit(0), 1000);
     });
-
-    // close cache
-    await cache.close();
-
-    // wait for log write
-    setTimeout(() => {
-        logger.info('Process terminated');
-        process.exit(0);
-    }, 1000);
 });
 
 const port = process.env.PORT || 8088;
-app.listen(port, () => {
+const server = app.listen(port, () => {
     logger.info(`Server start on http://localhost:${port}${api_root}`);
 });
 
 function cookie_decrypt( uuid, encrypted, password, crypto_type = 'legacy' )
 {
+    if (crypto_type === 'none') return JSON.parse(encrypted);
     const CryptoJS = require('crypto-js');
     
     if (crypto_type === 'aes-128-cbc-fixed') {
@@ -188,6 +205,7 @@ function cookie_encrypt( uuid, data, password, crypto_type = 'legacy' )
 {
     const CryptoJS = require('crypto-js');
     const data_to_encrypt = JSON.stringify(data);
+    if (crypto_type === 'none') return data_to_encrypt;
     
     if (crypto_type === 'aes-128-cbc-fixed') {
         // 新的标准 AES-128-CBC 算法，使用固定 IV
@@ -209,4 +227,3 @@ function cookie_encrypt( uuid, data, password, crypto_type = 'legacy' )
         return encrypted;
     }
 }
-  

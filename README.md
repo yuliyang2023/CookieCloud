@@ -140,6 +140,22 @@ Download:
    - password: optional, if not provided returns the encrypted string, if provided attempts to decrypt and send the content;
 
 
+### Plaintext mode for private networks
+
+Select **No encryption (plaintext)** under the extension's encryption algorithm setting. The password may be left empty. Save the settings to sync. The default encryption mode remains unchanged.
+
+This mode transmits and stores both cookies and LocalStorage in plaintext and is intended for trusted private networks. Both the extension and server must include this change. The existing Docker Compose file uses a prebuilt image; build and replace the image to enable this feature.
+
+The protocol uses `crypto_type: "none"`; `encrypted` contains a plaintext JSON string with `cookie_data`, `local_storage_data`, and `update_time`. `GET /get/:uuid` returns the field and mode marker; parse it with `JSON.parse(encrypted)`. `POST /get/:uuid` with a `password` also parses plaintext directly. Existing encrypted data is not converted automatically; upload again after changing modes.
+
+### Settings tab and uploaded cookie browser
+
+Clicking the Chrome toolbar icon opens `popup.html` in a tab, or focuses the existing settings tab. Unsaved edits are kept as a draft; **Save** applies them to background synchronization.
+
+**查询 / 刷新全部记录** lists every uploaded UUID on the configured server. Search by UUID, domain, cookie name or value, or expand a record to inspect its full data. Plaintext records need no password. Encrypted records are decrypted in the extension with the entered password; query again with the appropriate password for UUIDs using other passwords.
+
+`GET /records` returns `{ "records": [{ "uuid": "...", "crypto_type": "...", "encrypted": "..." }] }`. For this private network deployment, it lists all records without requiring each UUID and does not import cookies into the browser. Unreadable files return their UUID and an `error` without preventing other records from being listed.
+
 ## Cookie Encryption and Decryption Algorithm
 
 ### Encryption

@@ -30,6 +30,42 @@ interface DownloadPayload {
   crypto_type?: string;
 }
 
+export interface UploadedRecord {
+  uuid: string;
+  crypto_type: string;
+  data?: { cookie_data: CookieData; local_storage_data?: LocalStorageData; update_time?: string };
+  error?: string;
+}
+
+export async function query_uploaded_cookies(endpoint: string, password: string, extraHeaders: string = ''): Promise<UploadedRecord[]> {
+  const headers: Record<string, string> = {};
+  for (const line of extraHeaders.split('\n')) {
+    if (!line.trim()) continue;
+    const colon = line.indexOf(':');
+    if (colon < 1) throw new Error('请求 Header 格式应为 Key:Value');
+    headers[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+  }
+  const response = await fetch(endpoint.trim().replace(/\/+$/, '') + '/records', { headers, cache: 'no-store' });
+  if (!response.ok) throw new Error(response.status === 404 ? '服务端尚未支持查询，请更新服务端。' : `查询失败：HTTP ${response.status}`);
+  const result = await response.json();
+  if (!Array.isArray(result.records)) throw new Error('服务端返回的记录格式无效');
+  return result.records.map((record: any) => {
+    const crypto_type = record.crypto_type || 'legacy';
+    if (!record.error && crypto_type !== 'none' && !password) {
+      return { uuid: record.uuid, crypto_type, error: '此记录已加密，请填写对应密码后重新查询' };
+    }
+    try {
+      if (record.error) throw new Error('服务端记录无法读取');
+      if (!['none', 'legacy', 'aes-128-cbc-fixed'].includes(crypto_type)) throw new Error('不支持的加密算法');
+      const data = cookie_decrypt(record.uuid, record.encrypted, password, crypto_type);
+      if (!data || typeof data.cookie_data !== 'object' || data.cookie_data === null) throw new Error('Cookie 数据格式无效');
+      return { uuid: record.uuid, crypto_type, data };
+    } catch (error) {
+      return { uuid: record.uuid, crypto_type, error: record.error ? '服务端记录无法读取' : (crypto_type === 'none' ? '明文数据格式无效' : '无法解密，请检查此 UUID 对应的密码') };
+    }
+  });
+}
+
 function is_firefox(): boolean {
   return navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 }
@@ -138,7 +174,7 @@ export async function upload_cookie(payload: UploadPayload): Promise<any> {
   const { uuid, password } = payload;
   // console.log( payload );
   // none of the fields can be empty
-  if (!password || !uuid) {
+  if (!uuid || (payload.crypto_type !== 'none' && !password)) {
     alert("Invalid parameters");
     showBadge("err");
     return false;
@@ -171,14 +207,14 @@ export async function upload_cookie(payload: UploadPayload): Promise<any> {
     showBadge("err");
     return false;
   }
-  // Encrypt cookie with AES
+  // Encode cookie data using the selected mode
   const data_to_encrypt = JSON.stringify({ "cookie_data": cookies, "local_storage_data": local_storages, "update_time": new Date() });
   const crypto_type = payload.crypto_type || 'legacy';
   const encrypted = cookie_encrypt(payload.uuid, data_to_encrypt, payload.password, crypto_type);
   const endpoint = payload.endpoint.trim().replace(/\/+$/, '') + '/update';
 
   // get sha256 of the encrypted data
-  const sha256 = CryptoJS.SHA256(uuid + "-" + password + "-" + endpoint + "-" + data_to_encrypt).toString();
+  const sha256 = CryptoJS.SHA256(uuid + "-" + password + "-" + endpoint + "-" + crypto_type + "-" + data_to_encrypt).toString();
   console.log("sha256", sha256);
   const last_uploaded_info = await load_data('LAST_UPLOADED_COOKIE');
   // If same content has been uploaded within 24 hours, don't upload again
@@ -230,7 +266,7 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
     });
     const result = await response.json();
     if (result && result.encrypted) {
-      const useCryptoType = crypto_type || result.crypto_type || 'legacy';
+      const useCryptoType = result.crypto_type === 'none' ? 'none' : (crypto_type || result.crypto_type || 'legacy');
       const { cookie_data, local_storage_data } = cookie_decrypt(uuid, result.encrypted, password, useCryptoType);
       let action = 'done';
       if (cookie_data) {
@@ -252,7 +288,9 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
                 // Current timestamp (seconds)
                 const now = parseInt((new Date().getTime() / 1000).toString());
                 console.log("now", now);
-                new_cookie.expirationDate = now + parseInt(expire_minutes.toString()) * 60;
+                // -1 requests long-term persistence within Chrome's 400-day limit.
+                const minutes = expire_minutes === -1 ? 400 * 24 * 60 : parseInt(expire_minutes.toString());
+                new_cookie.expirationDate = now + minutes * 60;
                 console.log("new_cookie.expirationDate", new_cookie.expirationDate);
 
               }
@@ -293,6 +331,7 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
 }
 
 function cookie_decrypt(uuid: string, encrypted: string, password: string, crypto_type: string = 'legacy'): any {
+  if (crypto_type === 'none') return JSON.parse(encrypted);
   const hash = CryptoJS.MD5(uuid + '-' + password).toString();
   const the_key = hash.substring(0, 16);
   
@@ -317,6 +356,7 @@ function cookie_decrypt(uuid: string, encrypted: string, password: string, crypt
 }
 
 function cookie_encrypt(uuid: string, data: string, password: string, crypto_type: string = 'legacy'): string {
+  if (crypto_type === 'none') return data;
   const hash = CryptoJS.MD5(uuid + '-' + password).toString();
   const the_key = hash.substring(0, 16);
   

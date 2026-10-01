@@ -4,6 +4,20 @@ import browser from 'webextension-polyfill';
 export default defineBackground(() => {
   console.log('CookieCloud Background Script Started', { id: browser.runtime.id });
 
+  (browser.action ?? browser.browserAction).onClicked.addListener(async tab => {
+    const page = browser.runtime.getURL('/popup.html');
+    const existing = (await browser.tabs.query({})).find(item => item.url?.split('?')[0] === page);
+    if (existing?.id !== undefined) {
+      await browser.tabs.update(existing.id, { active: true });
+      if (existing.windowId !== undefined) await browser.windows.update(existing.windowId, { focused: true });
+      return;
+    }
+    const params = new URLSearchParams();
+    if (tab.id !== undefined) params.set('targetTabId', String(tab.id));
+    if (tab.url) params.set('targetUrl', tab.url);
+    await browser.tabs.create({ url: `${page}?${params}`, active: true });
+  });
+
   browser.runtime.onInstalled.addListener(function (details) {
     if (details.reason == "install") {
       browser.alarms.create('bg_1_minute', {
