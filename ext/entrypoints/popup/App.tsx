@@ -106,11 +106,11 @@ const CookieCloudPopup: React.FC = () => {
           alert(action + (browser.i18n.getMessage('success') || '成功'));
         }
       } else {
-        alert(action + (browser.i18n.getMessage('failedCheckInfo') || '失败，请检查填写的信息是否正确'));
+        alert(action + (browser.i18n.getMessage('failedCheckInfo') || '失败，请检查填写的信息是否正确') + (ret?.note ? `\n${ret.note}` : ''));
       }
     } catch (error) {
       console.error('Test failed:', error);
-      alert(action + (browser.i18n.getMessage('failedCheckInfo') || '失败，请检查填写的信息是否正确'));
+      alert(action + (browser.i18n.getMessage('failedCheckInfo') || '失败，请检查填写的信息是否正确') + `\n${error instanceof Error ? error.message : String(error)}`);
     }
   };
 

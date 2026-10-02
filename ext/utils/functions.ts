@@ -28,6 +28,7 @@ interface DownloadPayload {
   endpoint: string;
   expire_minutes?: number;
   crypto_type?: string;
+  headers?: string;
 }
 
 export interface UploadedRecord {
@@ -57,7 +58,6 @@ export async function apply_browser_cookie_value(cookie: any, value: string): Pr
     if (cookie[key] !== undefined && cookie[key] !== null) details[key] = cookie[key];
   }
   if (!is_host_only_cookie(cookie)) details.domain = cookie.domain;
-  if (details.sameSite === 'unspecified' && is_firefox()) details.sameSite = 'no_restriction';
   const saved = await browser.cookies.set(details);
   if (!saved || saved.value !== value || is_host_only_cookie(saved) !== is_host_only_cookie(cookie) || saved.domain !== cookie.domain) {
     throw new Error('浏览器未按原域名和范围保存 Cookie，请检查本地 Cookie');
@@ -179,11 +179,6 @@ async function change_uploaded_cookie(endpoint: string, password: string, extraH
   throw new Error('自动上传正在频繁更新此记录，请稍后重试或暂停上传后操作');
 }
 
-function is_firefox(): boolean {
-  return navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
-}
-
-
 export async function browser_set(key: string, value: any): Promise<void> {
   return await browser.storage.local.set({ [key]: value });
 }
@@ -300,25 +295,14 @@ export async function upload_cookie(payload: UploadPayload): Promise<any> {
   const with_storage = payload['with_storage'] || 0;
   const local_storages = with_storage ? await get_local_storage_by_domains(domains) : {};
 
-  let headers: any = { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' }
+  let headers: Record<string, string>;
   // Add authentication header
   try {
-    if (payload.headers?.trim().length) {
-      let extraHeaderPairs = payload.headers.trim().split("\n");
-      extraHeaderPairs.forEach((extraHeaderPair, index) => {
-        let extraHeaderPairKV = String(extraHeaderPair).split(":");
-        if (extraHeaderPairKV?.length > 1) {
-          headers[extraHeaderPairKV[0]] = extraHeaderPairKV[1];
-        } else {
-          console.log("error", "Header parsing error: ", extraHeaderPair);
-          showBadge("fail", "orange");
-        }
-      })
-    }
+    headers = { ...request_headers(payload.headers || ''), 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' };
   } catch (error) {
     console.log("error", error);
     showBadge("err");
-    return false;
+    return { action: 'failed', note: error instanceof Error ? error.message : String(error) };
   }
   // Encode cookie data using the selected mode
   const data_to_encrypt = JSON.stringify({ "cookie_data": cookies, "local_storage_data": local_storages, "update_time": new Date() });
@@ -349,6 +333,7 @@ export async function upload_cookie(payload: UploadPayload): Promise<any> {
       headers: headers,
       body: gzip(JSON.stringify(payload2)) as any
     });
+    if (!response.ok) throw new Error(`上传失败：HTTP ${response.status}`);
     const result = await response.json();
 
     if (result && result.action === 'done')
@@ -358,13 +343,13 @@ export async function upload_cookie(payload: UploadPayload): Promise<any> {
   } catch (error) {
     console.log("error", error);
     showBadge("err");
-    return false;
+    return { action: 'failed', note: error instanceof Error ? error.message : String(error) };
   }
 }
 
 export async function download_cookie(payload: DownloadPayload): Promise<any> {
   const { uuid, password, expire_minutes, crypto_type } = payload;
-  let endpoint = payload.endpoint.trim().replace(/\/+$/, '') + '/get/' + uuid;
+  let endpoint = payload.endpoint.trim().replace(/\/+$/, '') + '/get/' + encodeURIComponent(uuid);
   // 如果指定了加密算法，添加查询参数
   if (crypto_type) {
     endpoint += `?crypto_type=${crypto_type}`;
@@ -374,14 +359,17 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
     const response = await fetch(endpoint, {
       method: 'GET',
       headers: {
+        ...request_headers(payload.headers || ''),
         'Content-Type': 'application/json'
       }
     });
+    if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`);
     const result = await response.json();
     if (result && result.encrypted) {
       const useCryptoType = result.crypto_type === 'none' ? 'none' : (crypto_type || result.crypto_type || 'legacy');
       const { cookie_data, local_storage_data } = cookie_decrypt(uuid, result.encrypted, password, useCryptoType);
       let action = 'done';
+      const cookieErrors: string[] = [];
       if (cookie_data) {
         for (let domain in cookie_data) {
           // console.log( "domain" , cookies[domain] );
@@ -390,13 +378,9 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
               let new_cookie: any = {};
               ['name', 'value', 'path', 'secure', 'httpOnly', 'sameSite', 'partitionKey'].forEach(key => {
                 if (cookie[key] === undefined || cookie[key] === null) return;
-                if (key == 'sameSite' && String(cookie[key]).toLowerCase() == 'unspecified' && is_firefox()) {
-                  // In Firefox, unspecified will cause cookie setting to fail
-                  // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/cookies/SameSiteStatus
-                  new_cookie['sameSite'] = 'no_restriction';
-                } else {
-                  new_cookie[key] = cookie[key];
-                }
+                // Firefox 140+ supports unspecified. Keep it distinct from
+                // no_restriction (SameSite=None), which requires Secure.
+                new_cookie[key] = cookie[key];
               });
               // Chrome creates a domain cookie whenever domain is supplied.
               // Omit it for host-only cookies so restoration replaces the original scope.
@@ -418,6 +402,7 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
                 await browser.cookies.set(new_cookie);
               } catch (error) {
                 action = 'false';
+                cookieErrors.push(error instanceof Error ? error.message : String(error));
                 showBadge("err");
                 console.log("set cookie error", error);
               }
@@ -439,12 +424,13 @@ export async function download_cookie(payload: DownloadPayload): Promise<any> {
         }
       }
 
-      return { action };
+      return { action, note: cookieErrors.length ? `${cookieErrors.length} 个 Cookie 写入失败：${cookieErrors[0]}` : (action !== 'done' ? '服务器数据缺少 cookie_data' : undefined) };
     }
+    return { action: 'failed', note: '服务器未返回 Cookie 数据，请确认此 UUID 已上传数据' };
   } catch (error) {
     console.log("error", error);
     showBadge("err");
-    return false;
+    return { action: 'failed', note: error instanceof Error ? error.message : String(error) };
   }
 }
 
