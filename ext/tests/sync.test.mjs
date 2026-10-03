@@ -13,11 +13,11 @@ const config = {
 };
 const cookie = { name: 'session', value: 'test', domain: 'example.com', path: '/', secure: true, sameSite: 'unspecified', hostOnly: true };
 
-function setup(fetch, setCookie = async details => details) {
+function setup(fetch, setCookie = async details => details, overrides = {}) {
   const storage = {};
   const badge = { setBadgeText() {}, setBadgeBackgroundColor() {} };
   const context = {
-    console: { log() {} }, Error, fetch, navigator: { userAgent: 'Firefox/140.0' },
+    console: { log() {} }, Error, URL, fetch, navigator: { userAgent: 'Firefox/140.0' },
     setTimeout() {}, alert() {},
     browser: {
       browserAction: badge,
@@ -26,6 +26,7 @@ function setup(fetch, setCookie = async details => details) {
         get: async key => ({ [key]: storage[key] }),
         set: async entries => Object.assign(storage, entries),
       } },
+      ...overrides,
     },
   };
   function load(file, dependencies = {}) {
@@ -153,4 +154,102 @@ test('missing server data and malformed headers report useful errors', async () 
     assert.match(invalid.note, /Header/);
   }
   assert.equal(requests, 1);
+});
+
+test('page upload merges cookie identities and preserves unrelated data through a conflict', async () => {
+  let reads = 0;
+  let writes = 0;
+  const edited = { ...cookie, value: 'logged-in' };
+  const extra = { ...cookie, name: 'new-login' };
+  const unrelated = { ...cookie, domain: 'other.example', value: 'unchanged' };
+  const api = setup(async (url, request) => {
+    assert.equal(request.headers.Authorization, 'Bearer test:token');
+    if (request.method !== 'POST') {
+      reads++;
+      return { ok: true, json: async () => ({ crypto_type: 'none', encrypted: JSON.stringify({
+        cookie_data: { keyword: [cookie], 'other.example': [unrelated] },
+        local_storage_data: { 'other.example': { token: 'retained' } }, custom: reads,
+      }) }) };
+    }
+    writes++;
+    const body = JSON.parse(request.body);
+    assert.equal(JSON.parse(body.expected_encrypted).custom, reads);
+    const data = JSON.parse(body.encrypted);
+    assert.equal(data.cookie_data.keyword[0].value, 'logged-in');
+    assert.deepEqual(data.cookie_data['other.example'], [unrelated]);
+    assert.equal(data.cookie_data['example.com'][0].name, 'new-login');
+    assert.equal(data.local_storage_data['other.example'].token, 'retained');
+    assert.equal(data.custom, reads);
+    return writes === 1 ? { ok: false, status: 409 } : { ok: true, json: async () => ({ action: 'done' }) };
+  });
+  await api.upload_page_cookies({ ...config, crypto_type: 'none' }, [edited, extra]);
+  assert.equal(reads, 2);
+  assert.equal(writes, 2);
+});
+
+test('page upload creates a new UUID only when the record is missing', async () => {
+  let writes = 0;
+  const api = setup(async (url, request) => {
+    if (request.method !== 'POST') return { ok: false, status: 404 };
+    writes++;
+    const body = JSON.parse(request.body);
+    assert.equal(body.uuid, config.uuid);
+    assert.equal(body.expected_encrypted, undefined);
+    assert.equal(JSON.parse(body.encrypted).cookie_data['example.com'][0].value, cookie.value);
+    return { ok: true, json: async () => ({ action: 'done' }) };
+  });
+  await api.upload_page_cookies({ ...config, crypto_type: 'none' }, [cookie]);
+  assert.equal(writes, 1);
+});
+
+test('page upload refuses to replace unreadable records and authentication errors', async () => {
+  for (const response of [
+    { ok: false, status: 401 },
+    { ok: true, json: async () => ({ encrypted: 'invalid', crypto_type: 'legacy' }) },
+    { ok: true, json: async () => ({ encrypted: '{}', crypto_type: 'none' }) },
+  ]) {
+    const api = setup(async (url, request) => {
+      assert.notEqual(request.method, 'POST');
+      return response;
+    });
+    await assert.rejects(api.upload_page_cookies(config, [cookie]));
+  }
+});
+
+test('page upload stops after three conflicts', async () => {
+  let writes = 0;
+  const api = setup(async (url, request) => {
+    if (request.method !== 'POST') return { ok: true, json: async () => ({ crypto_type: 'none', encrypted: '{"cookie_data":{}}' }) };
+    writes++;
+    return { ok: false, status: 409 };
+  });
+  await assert.rejects(api.upload_page_cookies({ ...config, crypto_type: 'none' }, [cookie]), /频繁更新/);
+  assert.equal(writes, 3);
+});
+
+test('reading page cookies uses the clicked URL and its container rather than the settings tab', async () => {
+  const api = setup(async () => {}, undefined, {
+    tabs: { get: async id => { assert.equal(id, 7); return { url: 'https://example.com/account' }; } },
+    cookies: {
+      getAllCookieStores: async () => [{ id: 'default', tabIds: [1] }, { id: 'container', tabIds: [7] }],
+      getAll: async details => {
+        assert.equal(details.url, 'https://example.com/account');
+        assert.equal(details.storeId, 'container');
+        assert.equal(details.partitionKey, undefined);
+        return [{ ...cookie, httpOnly: true, storeId: 'container' }];
+      },
+    },
+  });
+  const result = await api.read_page_cookies(7);
+  assert.equal(result.storeId, 'container');
+  assert.equal(result.cookies[0].httpOnly, true);
+});
+
+test('reading page cookies rejects internal pages without querying cookies', async () => {
+  const api = setup(async () => {}, undefined, {
+    tabs: { get: async () => ({ url: 'about:config' }) },
+    cookies: { getAllCookieStores: async () => { throw new Error('Must not query cookies'); } },
+  });
+  await assert.rejects(api.read_page_cookies(7), /HTTP\/HTTPS/);
+  await assert.rejects(api.read_page_cookies(NaN), /标签 ID/);
 });

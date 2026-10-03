@@ -6,7 +6,7 @@ const app = express();
 const cors = require('cors');
 app.use(cors());
 
-const data_dir = path.join(__dirname, 'data');
+const data_dir = process.env.DATA_DIR || path.join(__dirname, 'data');
 // make dir if not exist
 if (!fs.existsSync(data_dir)) fs.mkdirSync(data_dir);
 
@@ -19,6 +19,12 @@ app.use(bodyParser.json({limit : '50mb' }));
 app.use(bodyParser.urlencoded({ extended: true }));
 
 const api_root = process.env.API_ROOT ? process.env.API_ROOT.trim().replace(/\/+$/, '') : '';
+const { attachKeepAlive } = require('./server-keep-alive.cjs');
+const { CookieJar, Cookie } = require('tough-cookie');
+const keepAlive = attachKeepAlive(app, {
+    dataDir: data_dir, decrypt: cookie_decrypt, encrypt: cookie_encrypt, CookieJar, Cookie,
+}, api_root);
+process.on('SIGTERM', () => { keepAlive.close(); process.exit(0); });
 // console.log(api_root, process.env);
 
 app.all(`${api_root}/`, (req, res) => {
@@ -154,7 +160,7 @@ app.use(function (err, req, res, next) {
 });
 
 
-const port = 8088;
+const port = process.env.PORT || 8088;
 app.listen(port, () => {
     console.log(`Server start on http://localhost:${port}${api_root}`);
 });

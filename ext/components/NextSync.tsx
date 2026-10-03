@@ -41,8 +41,8 @@ export default function NextSync() {
     else if (next === null) status = '当前间隔无法安排同步，请检查已保存的同步间隔';
     else status = `${label}：${new Date(next).toLocaleString()}（约 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒后）`;
   }
-  return <section className="rounded border border-blue-100 bg-blue-50 p-4 mb-5">
-    <p className="text-sm font-medium text-gray-800">{status}</p>
-    <p className="text-xs text-gray-500 mt-1">按已保存配置计算，草稿不影响计划。浏览器休眠或后台调度可能延迟执行。</p>
+  return <section className="rounded border border-blue-100 dark:border-blue-800 bg-blue-50 dark:bg-blue-950 p-4 mb-5">
+    <p className="text-sm font-medium text-gray-800 dark:text-slate-100">{status}</p>
+    <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">按已保存配置计算，草稿不影响计划。浏览器休眠或后台调度可能延迟执行。</p>
   </section>;
 }

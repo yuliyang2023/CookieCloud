@@ -48,13 +48,13 @@ export function is_host_only_cookie(cookie: { domain?: string; hostOnly?: boolea
 export function cookie_identity(cookie: any): string {
   return JSON.stringify([
     cookie.name, cookie.domain, cookie.path || '/', is_host_only_cookie(cookie), cookie.storeId || '',
-    cookie.partitionKey?.topLevelSite || '', cookie.partitionKey?.hasCrossSiteAncestor ?? null,
+    cookie.partitionKey?.topLevelSite || '', cookie.partitionKey?.hasCrossSiteAncestor ?? null, cookie.firstPartyDomain || '',
   ]);
 }
 
 export async function apply_browser_cookie_value(cookie: any, value: string): Promise<void> {
   const details: any = { url: buildUrl(cookie.secure, cookie.domain, cookie.path || '/'), name: cookie.name, value };
-  for (const key of ['path', 'secure', 'httpOnly', 'sameSite', 'partitionKey', 'storeId', 'expirationDate']) {
+  for (const key of ['path', 'secure', 'httpOnly', 'sameSite', 'partitionKey', 'storeId', 'expirationDate', 'firstPartyDomain']) {
     if (cookie[key] !== undefined && cookie[key] !== null) details[key] = cookie[key];
   }
   if (!is_host_only_cookie(cookie)) details.domain = cookie.domain;
@@ -62,6 +62,87 @@ export async function apply_browser_cookie_value(cookie: any, value: string): Pr
   if (!saved || saved.value !== value || is_host_only_cookie(saved) !== is_host_only_cookie(cookie) || saved.domain !== cookie.domain) {
     throw new Error('浏览器未按原域名和范围保存 Cookie，请检查本地 Cookie');
   }
+}
+
+export async function read_page_cookies(tabId: number): Promise<{ url: string; storeId: string; cookies: any[] }> {
+  if (!Number.isSafeInteger(tabId) || tabId < 0) throw new Error('页面标签 ID 无效');
+  const tab = await browser.tabs.get(tabId);
+  const url = new URL(tab.url || '');
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('当前页面不是可读取 Cookie 的 HTTP/HTTPS 网页');
+  const stores = await browser.cookies.getAllCookieStores();
+  const storeId = stores.find(store => store.tabIds.includes(tabId))?.id;
+  if (!storeId) throw new Error('无法确定当前页面的 Cookie 存储，请刷新网站页面后重试');
+  return { url: url.href, storeId, cookies: await browser.cookies.getAll({ url: url.href, storeId }) };
+}
+
+export interface ServerKeepAliveStatus {
+  enabled: boolean;
+  rules: { url: string; interval: number; verify_tls?: boolean; next_run: number; last_run: number | null; last_status: number | null; last_error: string | null }[];
+}
+
+export async function server_keep_alive(payload: UploadPayload, rules?: { url: string; interval: number; verify_tls?: boolean }[], enabled = true): Promise<ServerKeepAliveStatus> {
+  if (!payload.endpoint.trim() || !payload.uuid) throw new Error('请先填写服务器地址和 UUID');
+  const response = await fetch(`${payload.endpoint.trim().replace(/\/+$/, '')}/keep-alive/${encodeURIComponent(payload.uuid)}`, {
+    method: rules ? 'POST' : 'GET',
+    headers: { ...request_headers(payload.headers || ''), 'Content-Type': 'application/json' },
+    cache: 'no-store',
+    ...(rules ? { body: JSON.stringify({ password: payload.password, rules, enabled }) } : {}),
+  });
+  let result: any;
+  try { result = await response.json(); } catch { throw new Error('服务端尚未支持保活任务，请更新服务端'); }
+  if (!response.ok) throw new Error(result.error || `服务端保活配置失败：HTTP ${response.status}`);
+  if (typeof result.enabled !== 'boolean' || !Array.isArray(result.rules)) throw new Error('服务端返回的保活任务格式无效');
+  return result;
+}
+
+export async function upload_page_cookies(payload: UploadPayload, cookies: any[]): Promise<void> {
+  if (!payload.endpoint || !payload.uuid || (payload.crypto_type !== 'none' && !payload.password)) throw new Error('请先填写服务器地址、UUID 和密码');
+  if (!cookies.length) throw new Error('当前页面没有可上传的 Cookie');
+  if (!['none', 'legacy', 'aes-128-cbc-fixed'].includes(payload.crypto_type || 'legacy')) throw new Error('不支持的加密算法');
+  const base = payload.endpoint.trim().replace(/\/+$/, '');
+  const headers = request_headers(payload.headers || '');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(`${base}/get/${encodeURIComponent(payload.uuid)}`, { headers, cache: 'no-store' });
+    let data: any = { cookie_data: {}, local_storage_data: {} };
+    let expected: string | undefined;
+    let mode = payload.crypto_type || 'legacy';
+    if (response.ok) {
+      const record = await response.json();
+      mode = record.crypto_type || 'legacy';
+      if (!['none', 'legacy', 'aes-128-cbc-fixed'].includes(mode)) throw new Error('不支持服务端记录的加密算法');
+      if (mode !== 'none' && !payload.password) throw new Error('服务端记录已加密，请填写对应密码');
+      try { data = cookie_decrypt(payload.uuid, record.encrypted, payload.password, mode); }
+      catch { throw new Error('无法解密服务端已有记录，请检查密码'); }
+      if (!data?.cookie_data || typeof data.cookie_data !== 'object' || Array.isArray(data.cookie_data)) throw new Error('服务端 Cookie 数据格式无效');
+      expected = record.encrypted;
+    } else if (response.status !== 404) {
+      throw new Error(`读取服务端记录失败：HTTP ${response.status}`);
+    }
+    // Replace only matching identities, including copies in keyword groups.
+    const updates = new Map(cookies.map(cookie => [cookie_identity(cookie), cookie]));
+    for (const entries of Object.values(data.cookie_data)) {
+      if (!Array.isArray(entries)) throw new Error('服务端 Cookie 数据格式无效');
+      for (let i = 0; i < entries.length; i++) {
+        const updated = updates.get(cookie_identity(entries[i]));
+        if (updated) entries[i] = { ...updated };
+      }
+    }
+    for (const cookie of cookies) {
+      const exists = Object.values(data.cookie_data).some((entries: any) => entries.some((item: any) => cookie_identity(item) === cookie_identity(cookie)));
+      if (!exists) (data.cookie_data[cookie.domain] ||= []).push({ ...cookie });
+    }
+    data.update_time = new Date().toISOString();
+    const encrypted = cookie_encrypt(payload.uuid, JSON.stringify(data), payload.password, mode);
+    const saved = await fetch(base + '/update', {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uuid: payload.uuid, crypto_type: mode, encrypted, expected_encrypted: expected }),
+    });
+    if (saved.status === 409) continue;
+    if (!saved.ok) throw new Error(`上传失败：HTTP ${saved.status}`);
+    if ((await saved.json()).action !== 'done') throw new Error('服务器未确认保存成功');
+    return;
+  }
+  throw new Error('服务端记录正在频繁更新，请稍后重试');
 }
 
 export interface ClearCookiesResult {

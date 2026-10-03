@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { load_data, save_data } from '../../utils/functions';
 import UploadedCookies from '../../components/UploadedCookies';
+import PageCookies from '../../components/PageCookies';
+import ServerKeepAlive from '../../components/ServerKeepAlive';
 import NextSync from '../../components/NextSync';
+import ThemeSettings from '../../components/ThemeSettings';
 import { ConfigData, export_config, import_config } from '../../utils/config-transfer';
 import { handleConfigMessage } from '../../utils/messaging';
 import short_uid from 'short-uuid';
@@ -127,7 +130,7 @@ const CookieCloudPopup: React.FC = () => {
       alert(browser.i18n.getMessage("saveSucess") || "保存成功");
     } catch (error) {
       console.error('Save failed:', error);
-      alert('Save failed');
+      alert(error instanceof Error ? error.message : 'Save failed');
     }
   };
 
@@ -180,30 +183,37 @@ const CookieCloudPopup: React.FC = () => {
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto overflow-x-hidden bg-white rounded-lg shadow-lg flex flex-col min-h-screen relative">
+    <div className="w-full max-w-5xl mx-auto overflow-x-hidden bg-white dark:bg-slate-900 rounded-lg shadow-lg flex flex-col min-h-screen relative">
       <div className="flex-1 overflow-y-auto p-5 pb-20">
-        <div className="text-center mb-5 pb-4 border-b border-gray-200">
-          <h2 className="text-xl font-semibold text-gray-800">CookieCloud <span className="text-sm text-gray-500">v{browser.runtime.getManifest().version}</span></h2>
-          <p className="text-sm text-gray-500 mt-2">未保存的设置会自动保留为草稿；点击“保存”后才应用于自动同步。</p>
-          {draftError && <p role="alert" className="text-sm text-red-600 mt-2">{draftError}</p>}
+        <div className="text-center mb-5 pb-4 border-b border-gray-200 dark:border-slate-700">
+          <h2 className="text-xl font-semibold text-gray-800 dark:text-slate-100">CookieCloud <span className="text-sm text-gray-500 dark:text-slate-400">v{browser.runtime.getManifest().version}</span></h2>
+          <p className="text-sm text-gray-500 dark:text-slate-400 mt-2">未保存的设置会自动保留为草稿；点击“保存”后才应用于自动同步。</p>
+          {draftError && <p role="alert" className="text-sm text-red-600 dark:text-red-400 mt-2">{draftError}</p>}
         </div>
 
+        <ThemeSettings />
         <NextSync />
-        <section className="border border-gray-200 rounded p-4 mb-5">
-          <h3 className="font-medium text-gray-800">配置导入 / 导出</h3>
-          <p className="text-sm text-gray-500 mt-2">导出当前页面的全部设置，包含 UUID、密码和请求 Header，请妥善保管。配置文件不包含 Cookie 或 LocalStorage 数据。</p>
+        {loaded && <PageCookies config={data} addKeepAlive={(url, interval) => {
+          const address = new URL(url); address.hash = '';
+          const lines = data.keep_live.split('\n').filter(line => line.split('|')[0].trim() !== address.href);
+          handleInputChange('keep_live', [...lines.filter(line => line.trim()), `${address.href}|${interval}`].join('\n'));
+        }} />}
+        {loaded && <ServerKeepAlive config={data} onChange={value => handleInputChange('keep_live', value)} />}
+        <section className="border border-gray-200 dark:border-slate-700 rounded p-4 mb-5">
+          <h3 className="font-medium text-gray-800 dark:text-slate-100">配置导入 / 导出</h3>
+          <p className="text-sm text-gray-500 dark:text-slate-400 mt-2">导出当前页面的全部设置，包含 UUID、密码和请求 Header，请妥善保管。配置文件不包含 Cookie 或 LocalStorage 数据。</p>
           <div className="flex gap-2 mt-3">
             <button className="btn btn-primary disabled:opacity-50" disabled={!loaded || importing} onClick={exportConfig}>导出配置</button>
-            <button className="btn bg-gray-100 disabled:opacity-50" disabled={!loaded || importing} onClick={() => importInput.current?.click()}>{importing ? '导入中…' : '导入配置'}</button>
+            <button className="btn bg-gray-100 dark:bg-slate-700 disabled:opacity-50" disabled={!loaded || importing} onClick={() => importInput.current?.click()}>{importing ? '导入中…' : '导入配置'}</button>
             <input ref={importInput} type="file" accept=".json,application/json" className="hidden" onChange={importConfig} aria-label="选择配置 JSON 文件" />
           </div>
-          {transferMessage && <p role={transferError ? 'alert' : 'status'} className={`text-sm mt-3 ${transferError ? 'text-red-600' : 'text-green-700'}`}>{transferMessage}</p>}
+          {transferMessage && <p role={transferError ? 'alert' : 'status'} className={`text-sm mt-3 ${transferError ? 'text-red-600 dark:text-red-400' : 'text-green-700 dark:text-emerald-400'}`}>{transferMessage}</p>}
         </section>
         
         <fieldset disabled={!loaded || importing} className="space-y-4">
           {/* Working Mode */}
           <div>
-            <label className="block text-sm font-medium text-gray-600 mb-2">
+            <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-2">
               {browser.i18n.getMessage('workingMode') || '工作模式'}
             </label>
             <div className="flex flex-wrap gap-4">
@@ -253,7 +263,7 @@ const CookieCloudPopup: React.FC = () => {
             <>
               {/* Server Address */}
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">
+                <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                   {browser.i18n.getMessage('serverHost') || '服务器地址'}
                 </label>
                 <input
@@ -267,7 +277,7 @@ const CookieCloudPopup: React.FC = () => {
 
               {/* UUID */}
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">
+                <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                   {browser.i18n.getMessage('uuid') || 'User KEY · UUID'}
                 </label>
                 <div className="flex">
@@ -283,7 +293,7 @@ const CookieCloudPopup: React.FC = () => {
                       onCopy={() => onCopySuccess('UUID')}
                     >
                       <button
-                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-slate-400 hover:text-gray-600 dark:hover:text-slate-200"
                         title="复制 UUID"
                       >
                         <CopyIcon />
@@ -291,7 +301,7 @@ const CookieCloudPopup: React.FC = () => {
                     </CopyToClipboard>
                   </div>
                   <button
-                    className="ml-2 px-3 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+                    className="ml-2 px-3 py-2 bg-gray-500 dark:bg-slate-600 text-white rounded hover:bg-gray-600 dark:hover:bg-slate-500"
                     onClick={uuidRegen}
                   >
                     {browser.i18n.getMessage('reGenerate') || '重新生成'}
@@ -301,7 +311,7 @@ const CookieCloudPopup: React.FC = () => {
 
               {/* Password */}
               {data.crypto_type !== 'none' && <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">
+                <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                   {browser.i18n.getMessage('syncPassword') || '端对端加密密码'}
                 </label>
                 <div className="flex">
@@ -318,7 +328,7 @@ const CookieCloudPopup: React.FC = () => {
                       onCopy={() => onCopySuccess('Password')}
                     >
                       <button
-                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 dark:text-slate-400 hover:text-gray-600 dark:hover:text-slate-200"
                         title="复制密码"
                       >
                         <CopyIcon />
@@ -326,7 +336,7 @@ const CookieCloudPopup: React.FC = () => {
                     </CopyToClipboard>
                   </div>
                   <button
-                    className="ml-2 px-3 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+                    className="ml-2 px-3 py-2 bg-gray-500 dark:bg-slate-600 text-white rounded hover:bg-gray-600 dark:hover:bg-slate-500"
                     onClick={passwordGen}
                   >
                     {browser.i18n.getMessage('generate') || '生成'}
@@ -336,7 +346,7 @@ const CookieCloudPopup: React.FC = () => {
 
               {/* Crypto Algorithm */}
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">
+                <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                   {browser.i18n.getMessage('cryptoAlgorithm') || '加密算法'}
                 </label>
                 <select
@@ -348,7 +358,7 @@ const CookieCloudPopup: React.FC = () => {
                   <option value="aes-128-cbc-fixed">{browser.i18n.getMessage('cryptoAesCbcFixed') || 'AES-128-CBC(固定IV)'}</option>
                   <option value="none">{browser.i18n.getMessage('cryptoNone') || '不加密（明文）'}</option>
                 </select>
-                <div className="text-xs text-gray-500 mt-1">
+                <div className="text-xs text-gray-500 dark:text-slate-400 mt-1">
                   {data.crypto_type === 'none'
                     ? (browser.i18n.getMessage('cryptoNoneDesc') || '无需密码，Cookie 和 LocalStorage 将以明文传输并存储，适用于可信内网。')
                     : data.crypto_type === 'legacy'
@@ -360,7 +370,7 @@ const CookieCloudPopup: React.FC = () => {
 
               {/* Cookie Expiration Time */}
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">
+                <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                   {browser.i18n.getMessage('cookieExpireMinutes') || 'Cookie过期时间·分钟'}
                 </label>
                 <select className="form-input mb-2" aria-label={browser.i18n.getMessage('cookieExpiryMode') || 'Cookie 有效期模式'}
@@ -377,12 +387,12 @@ const CookieCloudPopup: React.FC = () => {
                   value={data.expire_minutes}
                   onChange={(e) => handleInputChange('expire_minutes', Math.max(0, parseInt(e.target.value) || 0))}
                 />}
-                <p className="text-xs text-gray-500 mt-1">{browser.i18n.getMessage('cookieExpiryDesc') || '仅在覆盖到浏览器时生效。0 为会话 Cookie；长期有效每次同步延长 400 天，无法延长网站服务端的登录会话。'}</p>
+                <p className="text-xs text-gray-500 dark:text-slate-400 mt-1">{browser.i18n.getMessage('cookieExpiryDesc') || '仅在覆盖到浏览器时生效。0 为会话 Cookie；长期有效每次同步延长 400 天，无法延长网站服务端的登录会话。'}</p>
               </div>
 
               {/* Sync Interval */}
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-1">
+                <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                   {browser.i18n.getMessage('syncTimeInterval') || '同步时间间隔·分钟'}
                 </label>
                 <input
@@ -399,7 +409,7 @@ const CookieCloudPopup: React.FC = () => {
                 <>
                   {/* Sync LocalStorage */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-2">
+                    <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-2">
                       {browser.i18n.getMessage('syncLocalStorageOrNot') || '是否同步Local Storage'}
                     </label>
                     <div className="flex items-center space-x-4">
@@ -430,7 +440,7 @@ const CookieCloudPopup: React.FC = () => {
 
                   {/* Additional Request Headers */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
+                    <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                       {browser.i18n.getMessage('requestHeader') || '请求Header·选填'}
                     </label>
                     <textarea
@@ -443,7 +453,7 @@ const CookieCloudPopup: React.FC = () => {
 
                   {/* Domain Filter */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
+                    <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                       {browser.i18n.getMessage('syncDomainKeyword') || '同步域名关键词·选填'}
                     </label>
                     <textarea
@@ -456,7 +466,7 @@ const CookieCloudPopup: React.FC = () => {
 
                   {/* Blacklist */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
+                    <label className="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1">
                       {browser.i18n.getMessage('syncDomainBlacklist') || '同步域名黑名单·选填'}
                     </label>
                     <textarea
@@ -467,36 +477,19 @@ const CookieCloudPopup: React.FC = () => {
                     />
                   </div>
 
-                  {/* Keep Live */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-600 mb-1">
-                      {browser.i18n.getMessage('cookieKeepLive') || 'Cookie Keep Alive · 选填'}
-                    </label>
-                    <textarea
-                      className="form-textarea"
-                      style={{ height: "60px" }}
-                      placeholder={browser.i18n.getMessage('cookieKeepLivePlaceholder') || '定期刷新URL在后台模拟用户活动。一行一个URL，默认60分钟，可以指定刷新时间与间隔'}
-                      value={data.keep_live}
-                      onChange={(e) => handleInputChange('keep_live', e.target.value)}
-                    />
-                  </div>
                 </>
               )}
             </>
           )}
 
-          {data.type === 'pause' && (
-            <div className="bg-blue-400 text-white p-3 rounded">
-              {browser.i18n.getMessage('keepLiveStop') || '保持活跃已停止'}
-            </div>
-          )}
+
 
         </fieldset>
         {loaded && <UploadedCookies endpoint={data.endpoint} password={data.password} headers={data.headers} currentUuid={data.uuid} mode={data.type} />}
       </div>
       
       {/* 固定在底部的按钮组 */}
-      <div className="sticky bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4">
+      <div className="sticky bottom-0 left-0 right-0 bg-white dark:bg-slate-900 border-t border-gray-200 dark:border-slate-700 p-4">
         <div className="flex justify-between">
           <div className="space-x-2">
             {data.type !== 'pause' && (

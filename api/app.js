@@ -7,7 +7,7 @@ const app = express();
 const cors = require('cors');
 app.use(cors());
 
-const data_dir = path.join(__dirname, 'data');
+const data_dir = process.env.DATA_DIR || path.join(__dirname, 'data');
 // make dir if not exist
 if (!fs.existsSync(data_dir)) fs.mkdirSync(data_dir);
 
@@ -32,6 +32,11 @@ const limiter = rateLimit({
 app.use(limiter);
 
 const api_root = process.env.API_ROOT ? process.env.API_ROOT.trim().replace(/\/+$/, '') : '';
+const { attachKeepAlive } = require('../docker/server-keep-alive.cjs');
+const { CookieJar, Cookie } = require('tough-cookie');
+const keepAlive = attachKeepAlive(app, {
+    dataDir: data_dir, decrypt: cookie_decrypt, encrypt: cookie_encrypt, CookieJar, Cookie,
+}, api_root);
 // console.log(api_root, process.env);
 
 // add health check
@@ -206,6 +211,7 @@ app.use(function (err, req, res, next) {
 
 // graceful shutdown
 process.on('SIGTERM', () => {
+    keepAlive.close();
     logger.info('SIGTERM signal received.');
 
     // close http server

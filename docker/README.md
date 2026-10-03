@@ -149,6 +149,28 @@ docker run -d \
 
 ## HTTP API
 
+### 服务端 Session Alive 保活
+
+此功能需要部署包含最新源码的服务端，旧镜像没有保活任务接口。可在 `docker` 目录执行 `docker build -t cookiecloud-session-alive .` 构建镜像，再按前面的部署方式使用该镜像并保留原数据挂载。
+
+先在插件上传登录 Cookie，然后在「服务端 Session Alive 保活」中填写 `https://example.com/account|10`，点击「保存并启用服务端保活」。服务端每 30 秒检查到期任务，使用当前 UUID 的最新 Cookie 发起 GET，处理响应 Set-Cookie 并更新该 UUID，保留其他 Cookie、LocalStorage 和加密方式。关闭浏览器后任务继续运行；插件不执行保活。
+
+任务独立于插件同步模式，需在该区域单独停用。加密记录需把解密密码提供给服务端，任务凭据以 AES-256-GCM 保存于挂载的数据目录中的 `.keep-alive` 子目录。备份时包含该目录的任务和密钥文件；状态接口不返回密码。
+
+服务端不执行网页 JavaScript，HTTP 成功不代表仍然登录；网站是否续期由其会话策略决定。普通容器、隐私容器和分区 Cookie 不会混入同一请求。浏览器自动上传可能覆盖服务端续期后的 Cookie，按需求选择同步方向。
+
+`POST /keep-alive/:uuid` 保存任务：
+
+```json
+{
+  "password": "此UUID的解密密码，明文记录可留空",
+  "enabled": true,
+  "rules": [{ "url": "https://example.com/account", "interval": 10 }]
+}
+```
+
+每个 UUID 最多 50 个地址，间隔为 1 至 10080 分钟。`GET /keep-alive/:uuid` 查询任务的启用状态、最近执行时间、HTTP 状态或错误和下次执行时间。提交 `{ "enabled": false }` 停止该 UUID 的任务并删除保存的凭据。接口遵守 `API_ROOT` 前缀，保活地址可为可信内网网站；任务管理接口应沿用服务端的受限访问方式。
+
 以下路径以未设置 `API_ROOT` 为例。
 
 | 方法 | 路径 | 用途 |
@@ -158,6 +180,7 @@ docker run -d \
 | GET / POST | `/get/:uuid` | 读取某个 UUID 的记录 |
 | GET | `/records` | 查询所有 UUID 的上传记录 |
 | POST | `/records/clear-cookies` | 清空各 UUID 的 Cookie，保留 LocalStorage |
+| GET / POST | `/keep-alive/:uuid` | 查询、启用或停用服务端保活任务 |
 
 ### 上传明文记录
 
@@ -251,3 +274,5 @@ docker compose up -d
 当前镜像没有内置身份认证，拥有服务访问权限的人可以查询所有 UUID、上传覆盖记录及调用清理接口。确认标记用于防止误操作，不是身份认证。
 
 建议部署在可信内网；需要远程访问时，通过 VPN 或带身份认证和 HTTPS 的反向代理接入。明文模式下应同时限制服务端访问范围和宿主机数据目录访问权限。
+
+HTTPS 保活默认校验证书。对于证书链不完整的可信地址，可在插件勾选该地址的“不校验 HTTPS 证书”后保存任务，或在该规则中设置 `verify_tls: false`。此时请求无法验证服务器身份；例外仅适用于该规则的原始源，跨源重定向仍校验证书，不影响其他任务和插件同步。

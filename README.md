@@ -172,6 +172,16 @@ Before saving, the extension fetches the latest record and locates the target by
 
 Restoration preserves host-only and partition scope, omitting `domain` for host-only cookies to avoid creating a domain cookie. The query table displays each scope. Existing records with different scopes remain intact and require manual cleanup after reviewing which cookie to retain.
 
+### Current-page cookies and server session keep-alive
+
+Click CookieCloud on a logged-in website to open **当前页面 Cookie**. Read cookies matching that page URL, including HttpOnly cookies, copy a Cookie header or full JSON, edit values, and save locally or upload to the configured UUID. Page uploads merge matching cookie identities into the latest server record, preserving other websites, LocalStorage and existing encryption. Edited values are also saved locally by default. If the website has updated its cookies, refresh the snapshot before saving.
+
+Upload the logged-in cookies first, select **将此页面加入服务端保活**, and click **保存并启用服务端保活** in the server keep-alive area. Rules accept one `https://example.com/account|10` per line (60 minutes by default, 1–10080 minutes, up to 50 URLs per UUID). The server checks due tasks every 30 seconds and issues GET requests using that UUID's latest cookies. It handles redirects and response Set-Cookie headers, preserves unrelated records and encryption, and restores tasks after a restart. The extension never opens or refreshes pages for keep-alive; closing the browser does not stop server tasks.
+
+Encrypted UUIDs require providing their password to the server. Credentials are stored with AES-256-GCM in `data/.keep-alive/`; the key has mode 0600 and the directory mode 0700. Back up the key with the task files. Status responses exclude credentials. Refresh task status to see the last request result and next execution time; disable server keep-alive explicitly to stop it. Extension pause mode and the bottom Save button only affect browser synchronization.
+
+Deploy the updated server before enabling tasks. Server requests do not execute JavaScript, and HTTP success does not establish that a session is still logged in. Browser uploads may replace server-renewed cookies, so choose the appropriate synchronization direction. Containers and partitioned cookies are not combined in outgoing headers; use separate UUIDs for separate browser containers.
+
 ### Configuration import and export
 
 The settings page provides **导出配置** (export) and **导入配置** (import). Export downloads the current form as JSON, including UUID, password, request headers and other settings. It does not contain cookies or LocalStorage data; keep the file private.
@@ -180,7 +190,7 @@ Import accepts version 1 exports and raw configuration JSON objects, validates f
 
 ### Settings tab and uploaded cookie browser
 
-Clicking the Chrome toolbar icon opens `popup.html` in a tab, or focuses the existing settings tab. Unsaved edits are kept as a draft; **Save** applies them to background synchronization.
+Clicking the toolbar icon opens `popup.html` in a tab, or updates the existing settings tab to the clicked website. Unsaved settings are kept as a draft; **Save** applies them to background synchronization. Refreshing or changing the target page discards unsaved Cookie value edits.
 
 **查询 / 刷新全部记录** lists every uploaded UUID on the configured server. Search by UUID, domain, cookie name or value, or expand a record to inspect its full data. Plaintext records need no password. Encrypted records are decrypted in the extension with the entered password; query again with the appropriate password for UUIDs using other passwords.
 
@@ -535,4 +545,6 @@ const main = async (env: Record<string, string>) => {
 
 Translated by GPT4
 
+HTTPS keep-alive verifies certificates by default. For a trusted endpoint with an incomplete certificate chain, disable verification for that URL in the extension or set `verify_tls: false` on its rule. This prevents authentication of the server and applies only to the original origin; cross-origin redirects and other tasks still verify certificates.
 
+The settings page offers Light, Dark, and System themes (System by default). Changes apply immediately and persist in the current browser without saving sync settings. System mode follows OS appearance changes across the entire settings page.
