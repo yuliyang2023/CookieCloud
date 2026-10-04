@@ -3,6 +3,7 @@ import browser from 'webextension-polyfill';
 import { CopyToClipboard } from 'react-copy-to-clipboard';
 import { ConfigData } from '../utils/config-transfer';
 import { apply_browser_cookie_value, cookie_identity, read_page_cookies, upload_page_cookies } from '../utils/functions';
+import { page_curl } from '../utils/curl';
 
 interface Props { config: ConfigData; addKeepAlive: (url: string, interval: number) => void }
 
@@ -13,12 +14,13 @@ export default function PageCookies({ config, addKeepAlive }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [showCurl, setShowCurl] = useState(false);
   const [applyLocal, setApplyLocal] = useState(true);
   const [interval, setInterval] = useState(60);
   const baseline = useRef<any[]>([]);
 
   const refresh = async () => {
-    setBusy(true); setError(''); setNotice(''); setLoaded(false); setCookies([]); setTarget(null);
+    setBusy(true); setError(''); setNotice(''); setShowCurl(false); setLoaded(false); setCookies([]); setTarget(null);
     try {
       const params = new URLSearchParams(location.search);
       const tabId = params.get('targetTabId');
@@ -58,6 +60,7 @@ export default function PageCookies({ config, addKeepAlive }: Props) {
   };
 
   const header = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+  const curl = target ? page_curl(target.url, cookies) : '';
   return <section className="border border-blue-200 dark:border-blue-800 rounded p-4 mb-5">
     <h3 className="text-lg font-semibold text-gray-800 dark:text-slate-100">当前页面 Cookie</h3>
     <p className="text-sm text-gray-500 dark:text-slate-400 mt-2">登录网站后点击插件，即可读取该页面的 Cookie（含 HttpOnly），复制或修改值，再上传到当前 UUID。</p>
@@ -66,7 +69,13 @@ export default function PageCookies({ config, addKeepAlive }: Props) {
       <button className="btn btn-primary disabled:opacity-50" disabled={busy} onClick={refresh}>{busy ? '处理中…' : '重新读取页面 Cookie'}</button>
       <CopyToClipboard text={header} onCopy={(_, ok) => ok ? setNotice('已复制 Cookie Header') : setError('复制失败，请手动复制下方文本')}><button className="btn bg-gray-100 dark:bg-slate-700 disabled:opacity-50" disabled={busy || !cookies.length}>复制 Cookie Header</button></CopyToClipboard>
       <CopyToClipboard text={JSON.stringify(cookies, null, 2)} onCopy={(_, ok) => ok ? setNotice('已复制 Cookie JSON') : setError('复制失败')}><button className="btn bg-gray-100 dark:bg-slate-700 disabled:opacity-50" disabled={busy || !cookies.length}>复制 JSON</button></CopyToClipboard>
+      <CopyToClipboard text={curl} onCopy={(_, ok) => { setShowCurl(true); setError(''); setNotice(''); if (ok) setNotice('已生成并复制 curl 命令'); else setError('复制失败，请手动复制下方 curl 命令'); }}><button className="btn bg-gray-100 dark:bg-slate-700 disabled:opacity-50" disabled={busy || !loaded || !target}>生成并复制 curl 命令</button></CopyToClipboard>
     </div>
+    {showCurl && <div className="mt-3">
+      <label htmlFor="page-curl-command" className="block text-sm">curl 命令</label>
+      <textarea id="page-curl-command" readOnly className="form-textarea mt-1 font-mono" value={curl} />
+      <p className="text-xs text-gray-500 dark:text-slate-400 mt-2">使用当前页面地址和编辑后的 Cookie，适用于 bash / zsh / sh。HTTPS 命令包含 -k，不校验证书。</p>
+    </div>}
     {loaded && <>
       <p className="text-sm text-gray-600 dark:text-slate-300 mt-3">共 {cookies.length} 个 Cookie。修改值后可复制、保存到浏览器或上传；重新读取会放弃未保存的 Cookie 修改。</p>
       <details className="mt-2"><summary className="cursor-pointer text-sm">查看 Cookie Header</summary><textarea aria-label="页面 Cookie Header" readOnly className="form-textarea mt-2" value={header} /></details>
